@@ -58,8 +58,7 @@ func get_execution(function_id: String, execution_id: String) -> Dictionary:
 ## List executions for a function.
 func list_executions(function_id: String, queries: Array = []) -> Dictionary:
 	var api_path := "/functions/%s/executions" % function_id
-	api_path = _with_queries(api_path, queries)
-	return await _client.call_api(HTTPClient.METHOD_GET, api_path)
+	return await _client.call_api(HTTPClient.METHOD_GET, Query._append_to_path(api_path, queries))
 
 
 ## Poll an execution until it reaches a terminal state.
@@ -93,14 +92,3 @@ func wait_for_execution(
 
 	# Unreachable, but keeps the parser happy.
 	return last_resp
-
-
-func _with_queries(path: String, queries: Array) -> String:
-	if queries.is_empty():
-		return path
-	var sep := "?"
-	var out := path
-	for q in queries:
-		out += "%squeries[]=%s" % [sep, str(q).uri_encode()]
-		sep = "&"
-	return out

@@ -2,10 +2,10 @@ extends Node
 
 const Helpers := preload("res://tests/test_helpers.gd")
 
-# A tiny “watch a collection in realtime” scene.
+# A tiny “watch a table in realtime” scene.
 # Use either:
 # - APPWRITE_REALTIME_CHANNEL (full channel string), OR
-# - APPWRITE_DATABASE_ID + APPWRITE_TABLE_ID (collection)
+# - APPWRITE_DATABASE_ID + APPWRITE_TABLE_ID (table)
 
 var _sub_id: int = -1
 var _realtime: AppwriteRealtime = null
@@ -107,4 +107,4 @@ func _compute_channel() -> String:
 	if database_id.is_empty() or table_id.is_empty():
 		return ""
 
-	return "databases.%s.collections.%s.documents" % [database_id, table_id]
+	return "tablesdb.%s.tables.%s.rows" % [database_id, table_id]

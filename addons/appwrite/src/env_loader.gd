@@ -10,11 +10,9 @@ static func _is_sensitive_key(key: String) -> bool:
 		or k.ends_with("_KEY")
 
 static func load_env(path: String = "res://.env") -> void:
-	if not FileAccess.file_exists(path):
-		printerr("EnvLoader: .env file not found at ", path)
-		return
-
 	var file = FileAccess.open(path, FileAccess.READ)
+	if file == null:
+		return
 	
 	while not file.eof_reached():
 		var line = file.get_line().strip_edges()

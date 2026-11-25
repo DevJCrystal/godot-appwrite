@@ -23,12 +23,12 @@ func _ready():
 		_finish(true, true, {"reason": "Missing APPWRITE_DATABASE_ID / APPWRITE_TABLE_ID"})
 		return
 
-	# Auth: required unless your collection allows guests.
+	# Auth: required unless your table allows guests.
 	var auth_email := OS.get_environment("APPWRITE_TEST_EMAIL").strip_edges()
 	var auth_password := OS.get_environment("APPWRITE_TEST_PASSWORD").strip_edges()
 	if auth_email.is_empty() or auth_password.is_empty():
 		print("⚠️ Skipping: APPWRITE_TEST_EMAIL / APPWRITE_TEST_PASSWORD not set.")
-		print("This test needs a user to login so it can create/list documents via permissions.")
+		print("This test needs a user to login so it can create/list rows via permissions.")
 		print("--- Test Finished ---")
 		_finish(true, true, {"reason": "Missing APPWRITE_TEST_EMAIL / APPWRITE_TEST_PASSWORD"})
 		return
@@ -53,38 +53,30 @@ func _ready():
 	var my_user_id := str(me.get("$id", ""))
 	print("Me ID: ", my_user_id)
 
-	# Create a document owned by this user.
-	# NOTE: Permission string format depends on your Appwrite version/settings.
-	# If your collection has "Document Security" enabled and defaults configured,
-	# you can leave permissions empty and rely on collection rules.
-	var permissions: Array[String] = []
-	# Common format in Appwrite REST: role strings like "user:<id>" inside permission calls.
-	# Some setups accept raw permission strings like 'read("user:<id>")'.
-	# We'll try leaving permissions empty by default.
-
-	print("Creating document...")
+	print("Creating row...")
 	randomize()
-	var doc_data := {
-		"testing": "Test Doc %d" % (randi() % 1000000)
+	var row_data := {
+		"testing": "Test Row %d" % (randi() % 1000000)
 	}
-	var created = await Appwrite.databases.create_document(database_id, table_id, "unique()", doc_data, permissions)
+	var created := await Appwrite.tables_db.create_row(database_id, table_id, "unique()", row_data)
 	if int(created.get("status_code", 0)) != 201:
-		print("❌ FAILED create document.")
+		print("❌ FAILED create row.")
 		print("Status Code: ", created.get("status_code", 0))
 		print("Error: ", created.get("data", {}))
-		print("Hint: check collection permissions / document security / attribute schema.")
+		print("Hint: check table permissions, row security, and column schema.")
 		print("--- Test Finished ---")
 		_finish(false, false, {"error": created.get("data", {})})
 		return
 	var created_data: Variant = created.get("data")
 	var created_dict: Dictionary = created_data if typeof(created_data) == TYPE_DICTIONARY else {}
-	var doc_id := str(created_dict.get("$id", ""))
-	print("✅ Document created: ", doc_id)
+	var row_id := str(created_dict.get("$id", ""))
+	print("✅ Row created: ", row_id)
 
-	print("Listing accessible documents...")
-	var listed = await Appwrite.databases.list_documents(database_id, table_id)
+	print("Listing accessible rows...")
+	var listed = await Appwrite.tables_db.list_rows(database_id, table_id)
 	if int(listed.get("status_code", 0)) != 200:
-		print("❌ FAILED list documents.")
+		await Appwrite.tables_db.delete_row(database_id, table_id, row_id)
+		print("❌ FAILED list rows.")
 		print("Status Code: ", listed.get("status_code", 0))
 		print("Error: ", listed.get("data", {}))
 		print("--- Test Finished ---")
@@ -95,10 +87,20 @@ func _ready():
 	var total := int(listed_dict.get("total", -1))
 	print("✅ List returned. total=", total)
 
-	print("Getting created document...")
-	var got = await Appwrite.databases.get_document(database_id, table_id, doc_id)
+	print("Updating created row...")
+	var updated_value := str(row_data["testing"]) + " updated"
+	var updated := await Appwrite.tables_db.update_row(database_id, table_id, row_id, {"testing": updated_value})
+	if updated.get("status_code") != 200:
+		await Appwrite.tables_db.delete_row(database_id, table_id, row_id)
+		print("❌ FAILED update row.")
+		_finish(false, false, {"error": updated.get("data", {})})
+		return
+
+	print("Getting updated row...")
+	var got = await Appwrite.tables_db.get_row(database_id, table_id, row_id)
 	if int(got.get("status_code", 0)) != 200:
-		print("❌ FAILED get document.")
+		await Appwrite.tables_db.delete_row(database_id, table_id, row_id)
+		print("❌ FAILED get row.")
 		print("Status Code: ", got.get("status_code", 0))
 		print("Error: ", got.get("data", {}))
 		print("--- Test Finished ---")
@@ -106,20 +108,21 @@ func _ready():
 		return
 	var got_data: Variant = got.get("data")
 	var got_dict: Dictionary = got_data if typeof(got_data) == TYPE_DICTIONARY else {}
-	print("✅ Got document. testing=", got_dict.get("testing", ""))
-	
-	#await get_tree().create_timer(5.0).timeout
-	
-	print("Deleting created document...")
-	var deleted = await Appwrite.databases.delete_document(database_id, table_id, doc_id)
+	print("✅ Got row. testing=", got_dict.get("testing", ""))
+
+	print("Deleting created row...")
+	var deleted = await Appwrite.tables_db.delete_row(database_id, table_id, row_id)
 	if int(deleted.get("status_code", 0)) != 204:
-		print("❌ FAILED delete document.")
+		print("❌ FAILED delete row.")
 		print("Status Code: ", deleted.get("status_code", 0))
 		print("Error: ", deleted.get("data", {}))
 		print("--- Test Finished ---")
 		_finish(false, false, {"error": deleted.get("data", {})})
 		return
 	print("✅ Deleted.")
+	if got_dict.get("testing") != updated_value:
+		_finish(false, false, {"error": "Row did not contain the updated value", "data": got_dict})
+		return
 
 	print("--- Test Finished ---")
 	_finish(true)

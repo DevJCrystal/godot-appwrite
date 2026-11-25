@@ -9,6 +9,7 @@ const _CONNECT_WAIT_SECONDS_DEFAULT := 5.0
 
 var _received := false
 var _last_message: Dictionary = {}
+var _expected_row_id := ""
 
 func _finish(ok: bool, skipped: bool = false, details: Dictionary = {}) -> void:
 	var out := details.duplicate()
@@ -19,6 +20,9 @@ func _finish(ok: bool, skipped: bool = false, details: Dictionary = {}) -> void:
 
 
 func _on_realtime_message(msg: Dictionary) -> void:
+	var payload: Variant = msg.get("payload")
+	if not payload is Dictionary or payload.get("$id") != _expected_row_id:
+		return
 	_received = true
 	_last_message = msg
 	var events: Array[String] = []
@@ -126,13 +130,13 @@ func _ready() -> void:
 	if not realtime.is_connected("message_received", Callable(self, "_on_rt_any_message")):
 		realtime.connect("message_received", Callable(self, "_on_rt_any_message"))
 
-	# Subscribe to document events for this collection.
-	# Channel format (Appwrite): databases.{databaseId}.collections.{collectionId}.documents
-	var channel := "databases.%s.collections.%s.documents" % [database_id, table_id]
+	# Subscribe to row events for this table.
+	var channel := "tablesdb.%s.tables.%s.rows" % [database_id, table_id]
 	print("Subscribing to channel: ", channel)
 
 	_received = false
 	_last_message = {}
+	_expected_row_id = "realtime_" + Crypto.new().generate_random_bytes(12).hex_encode()
 	var sub_id: int = realtime.subscribe([channel], Callable(self, "_on_realtime_message"))
 	if sub_id < 0:
 		print("❌ Failed to subscribe.")
@@ -140,7 +144,7 @@ func _ready() -> void:
 		_finish(false, false, {"error": "Subscribe failed"})
 		return
 
-	# Wait for the websocket to actually open before triggering events.
+	# Wait for the Appwrite handshake and initial subscription frame.
 	var connect_deadline_ms := Time.get_ticks_msec() + int(connect_wait_seconds * 1000.0)
 	while not realtime.get_connected() and Time.get_ticks_msec() < connect_deadline_ms:
 		await get_tree().process_frame
@@ -152,14 +156,13 @@ func _ready() -> void:
 		_finish(false, false, {"error": "Realtime connect timeout", "timeout_seconds": connect_wait_seconds})
 		return
 
-	print("Creating document to trigger realtime...")
-	randomize()
-	var doc_data := {
+	print("Creating row to trigger realtime...")
+	var row_data := {
 		"userId": my_user_id
 	}
-	var created := await Appwrite.databases.create_document(database_id, table_id, "unique()", doc_data)
+	var created := await Appwrite.tables_db.create_row(database_id, table_id, _expected_row_id, row_data)
 	if int(created.get("status_code", 0)) != 201:
-		print("❌ FAILED create document.")
+		print("❌ FAILED create row.")
 		print("Status Code: ", created.get("status_code", 0))
 		print("Error: ", created.get("data", {}))
 		realtime.unsubscribe(sub_id)
@@ -169,8 +172,8 @@ func _ready() -> void:
 
 	var created_data: Variant = created.get("data")
 	var created_dict: Dictionary = created_data if typeof(created_data) == TYPE_DICTIONARY else {}
-	var doc_id := str(created_dict.get("$id", ""))
-	print("✅ Document created: ", doc_id)
+	var row_id := str(created_dict.get("$id", ""))
+	print("✅ Row created: ", row_id)
 
 	var wait_full_raw := OS.get_environment("APPWRITE_REALTIME_WAIT_FULL").strip_edges().to_lower()
 	var wait_full := wait_full_raw == "true" or wait_full_raw == "1" or wait_full_raw == "yes" or wait_full_raw == "y"
@@ -183,9 +186,9 @@ func _ready() -> void:
 	# Keep connection alive if other subs exist; for the test, disconnect.
 	realtime.disconnect_now()
 
-	# Cleanup document.
-	if not doc_id.is_empty():
-		await Appwrite.databases.delete_document(database_id, table_id, doc_id)
+	# Cleanup row.
+	if not row_id.is_empty():
+		await Appwrite.tables_db.delete_row(database_id, table_id, row_id)
 
 	if not _received:
 		print("⚠️ No realtime message received within timeout.")

@@ -9,9 +9,9 @@ func _env_bool(name: String, default_value: bool = false) -> bool:
 	return raw == "true" or raw == "1" or raw == "yes" or raw == "y"
 
 
-func _print_docs_summary(label: String, docs_arr: Array) -> void:
-	print(label, " count=", docs_arr.size())
-	for d in docs_arr:
+func _print_rows_summary(label: String, rows_arr: Array) -> void:
+	print(label, " count=", rows_arr.size())
+	for d in rows_arr:
 		if typeof(d) != TYPE_DICTIONARY:
 			continue
 		var doc := d as Dictionary
@@ -54,41 +54,41 @@ func _ready():
 		_finish(false, false, {"error": auth.get("error", {})})
 		return
 	print("✅ Authenticated. Reused session=", auth.get("reused", false))
-	var print_docs_json: bool = _env_bool("APPWRITE_TEST_PRINT_DOCS_JSON", false)
+	var print_rows_json: bool = _env_bool("APPWRITE_TEST_PRINT_DOCS_JSON", false)
 
-	# Baseline: list documents without any queries
-	print("--- 0) list_documents() with NO queries ---")
-	var baseline: Dictionary = await Appwrite.databases.list_documents(database_id, table_id)
+	# Baseline: list rows without any queries
+	print("--- 0) list_rows() with NO queries ---")
+	var baseline: Dictionary = await Appwrite.tables_db.list_rows(database_id, table_id)
 	print("Status: ", baseline.get("status_code", 0))
 	var ok := true
 	if int(baseline.get("status_code", 0)) == 200:
 		var baseline_data: Variant = baseline.get("data")
 		var baseline_dict: Dictionary = baseline_data if typeof(baseline_data) == TYPE_DICTIONARY else {}
 		var total: Variant = baseline_dict.get("total", "<missing>")
-		var docs_v: Variant = baseline_dict.get("documents")
+		var rows_v: Variant = baseline_dict.get("rows")
 		var count: int = 0
-		var docs_arr: Array = []
-		if typeof(docs_v) == TYPE_ARRAY:
-			docs_arr = docs_v as Array
-			count = docs_arr.size()
+		var rows_arr: Array = []
+		if typeof(rows_v) == TYPE_ARRAY:
+			rows_arr = rows_v as Array
+			count = rows_arr.size()
 		var total_str: String = str(total)
 		if typeof(total) == TYPE_FLOAT or typeof(total) == TYPE_INT:
 			total_str = str(int(total))
 		print("Total=", total_str, " returned=", count)
-		_print_docs_summary("Docs (baseline):", docs_arr)
-		if print_docs_json:
-			print("Docs (baseline JSON):")
-			print(JSON.stringify(docs_arr, "  "))
+		_print_rows_summary("Rows (baseline):", rows_arr)
+		if print_rows_json:
+			print("Rows (baseline JSON):")
+			print(JSON.stringify(rows_arr, "  "))
 	else:
 		print("Error: ", baseline.get("data", {}))
 		ok = false
 
-	# Create a marker document so we can query for it.
-	var doc_marker := "QueryTest %d" % (randi() % 1000000)
-	print("Creating marker document... marker=", doc_marker)
-	var created: Dictionary = await Appwrite.databases.create_document(database_id, table_id, "unique()", {"testing": doc_marker}, [])
+	# Create a marker row so we can query for it.
+	var row_marker := "QueryTest %d" % (randi() % 1000000)
+	print("Creating marker row... marker=", row_marker)
+	var created := await Appwrite.tables_db.create_row(database_id, table_id, "unique()", {"testing": row_marker})
 	if int(created.get("status_code", 0)) != 201:
-		print("❌ FAILED create document.")
+		print("❌ FAILED create row.")
 		print("Status Code: ", created.get("status_code", 0))
 		print("Error: ", created.get("data", {}))
 		print("--- Test Finished ---")
@@ -96,16 +96,15 @@ func _ready():
 		return
 	var created_data: Variant = created.get("data")
 	var created_dict: Dictionary = created_data if typeof(created_data) == TYPE_DICTIONARY else {}
-	var doc_id := str(created_dict.get("$id", ""))
-	print("✅ Created: ", doc_id)
+	var row_id := str(created_dict.get("$id", ""))
+	print("✅ Created: ", row_id)
 
-	var base_path := "/databases/%s/collections/%s/documents" % [database_id, table_id]
-	var q: String = Query.equal("testing", [doc_marker])
+	var q: String = Query.equal("testing", [row_marker])
 	print("Query JSON (unencoded): ", q)
 
 	# Filtered list via SDK wrapper (URL-encodes JSON queries[])
-	print("--- 1) list_documents() with query ---")
-	var filtered: Dictionary = await Appwrite.databases.list_documents(database_id, table_id, [q, Query.limit(10)])
+	print("--- 1) list_rows() with query ---")
+	var filtered: Dictionary = await Appwrite.tables_db.list_rows(database_id, table_id, [q, Query.limit(10)])
 	print("Status: ", filtered.get("status_code", 0))
 	if int(filtered.get("status_code", 0)) != 200:
 		print("Error: ", filtered.get("data", {}))
@@ -117,33 +116,33 @@ func _ready():
 		var f_total_str: String = str(f_total)
 		if typeof(f_total) == TYPE_FLOAT or typeof(f_total) == TYPE_INT:
 			f_total_str = str(int(f_total))
-		var f_docs_v: Variant = f_dict.get("documents")
-		var f_docs_arr: Array = []
-		if typeof(f_docs_v) == TYPE_ARRAY:
-			f_docs_arr = f_docs_v as Array
-		print("Total=", f_total_str, " returned=", f_docs_arr.size())
-		_print_docs_summary("Docs (filtered):", f_docs_arr)
+		var f_rows_v: Variant = f_dict.get("rows")
+		var f_rows_arr: Array = []
+		if typeof(f_rows_v) == TYPE_ARRAY:
+			f_rows_arr = f_rows_v as Array
+		print("Total=", f_total_str, " returned=", f_rows_arr.size())
+		_print_rows_summary("Rows (filtered):", f_rows_arr)
 
 		var found := false
-		for d in f_docs_arr:
+		for d in f_rows_arr:
 			if typeof(d) != TYPE_DICTIONARY:
 				continue
 			var doc := d as Dictionary
-			if str(doc.get("$id", "")) == doc_id:
+			if str(doc.get("$id", "")) == row_id:
 				found = true
 				break
 		if found:
-			print("✅ Query matched marker doc.")
+			print("✅ Query matched marker row.")
 		else:
-			print("❌ Query did not match marker doc (unexpected).")
+			print("❌ Query did not match marker row.")
 		ok = ok and found
-		if print_docs_json:
-			print("Docs (filtered JSON):")
-			print(JSON.stringify(f_docs_arr, "  "))
+		if print_rows_json:
+			print("Rows (filtered JSON):")
+			print(JSON.stringify(f_rows_arr, "  "))
 
 	# Cleanup
-	print("Cleaning up marker document...")
-	var deleted: Dictionary = await Appwrite.databases.delete_document(database_id, table_id, doc_id)
+	print("Cleaning up marker row...")
+	var deleted: Dictionary = await Appwrite.tables_db.delete_row(database_id, table_id, row_id)
 	print("Delete status: ", deleted.get("status_code", 0))
 	if int(deleted.get("status_code", 0)) != 204:
 		ok = false

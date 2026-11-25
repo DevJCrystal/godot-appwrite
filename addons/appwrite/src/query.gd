@@ -1,11 +1,19 @@
 class_name Query
 
-## Appwrite v1.8+ query strings are JSON-serialized objects.
+## Appwrite query strings are JSON-serialized objects.
 ## This matches the official Web SDK Query.toString() implementation.
 ## Example:
 ##   Query.equal("title", ["Iron Man"])
 ## returns:
 ##   {"method":"equal","attribute":"title","values":["Iron Man"]}
+
+static func _append_to_path(path: String, queries: Array) -> String:
+	var separator := "&" if path.contains("?") else "?"
+	for query in queries:
+		path += separator + "queries%5B%5D=" + str(query).uri_encode()
+		separator = "&"
+	return path
+
 
 static func _to_query(method: String, attribute: Variant = null, values: Variant = null) -> String:
 	var obj: Dictionary = {

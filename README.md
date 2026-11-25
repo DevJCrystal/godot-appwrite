@@ -1,10 +1,11 @@
 # Appwrite SDK for Godot 4.5+ (GDScript)
 
-An Appwrite Cloud client SDK for Godot 4.5+ written in GDScript.
+An Appwrite client SDK for Godot 4.5+ written in GDScript. Targets Appwrite Cloud and self-hosted Appwrite 2.7.4 using the `2.7.2` REST response format.
 
-- Endpoint: supports Appwrite Cloud region endpoints like `https://nyc.cloud.appwrite.io/v1`
 - Auth: client-safe session auth via cookies (no embedded API key)
-- Services implemented so far: **Account**, **Databases**, **Functions**, **Storage**, **Realtime**
+- Services: **Account**, **TablesDB**, **Functions**, **Storage**, **Realtime**, and the legacy **Databases** service
+
+See the [Appwrite 2.7.4 release notes](https://github.com/appwrite/appwrite/releases/tag/2.7.4) and [self-hosted upgrade guide](https://appwrite.io/docs/advanced/self-hosting/production/updates).
 
 ## Install
 
@@ -35,16 +36,29 @@ This project uses environment variables loaded from a local `.env` file.
 Important:
 - `.env` is ignored by git on purpose (it contains secrets).
 
-### Minimal `.env` (just to connect)
+### Appwrite Cloud
 
-If you only want the client to initialize and make basic requests:
+Copy the API endpoint and project ID from your project settings in the Appwrite Console. Use your project's region.
 
-- `APPWRITE_PROJECT_ID`
-- `APPWRITE_ENDPOINT`
+```dotenv
+APPWRITE_ENDPOINT=https://<REGION>.cloud.appwrite.io/v1
+APPWRITE_PROJECT_ID=<PROJECT_ID>
+```
 
-Optional (only if you’re developing against a self-signed instance):
+If you're using a Cloud project environment such as staging, keep the parent project's ID and add `APPWRITE_ENVIRONMENT_ID=<ENVIRONMENT_ID>`. The SDK applies it to REST requests and Realtime subscriptions. [Cloud endpoints](https://appwrite.io/docs/products/network/endpoints), [project environments](https://appwrite.io/docs/sdks#project-environments).
 
-- `APPWRITE_SELF_SIGNED=true`
+Use `Appwrite.set_environment(id)` to select an environment from code. Sign in and create new Realtime subscriptions after switching environments.
+
+### Self-hosted Appwrite
+
+Use the endpoint and project ID from your self-hosted instance.
+
+```dotenv
+APPWRITE_ENDPOINT=https://appwrite.example.com/v1
+APPWRITE_PROJECT_ID=<PROJECT_ID>
+```
+
+For local development with a self-signed certificate, set `APPWRITE_SELF_SIGNED=true`. [Self-hosting guide](https://appwrite.io/docs/advanced/self-hosting).
 
 ### Tests / realtime `.env` (end-to-end)
 
@@ -112,21 +126,21 @@ print("me data=", me.get("data"))
 # await Appwrite.account.delete_session("current")
 ```
 
-### Databases (list + create + update + queries)
+### TablesDB (list + create + update + queries)
 
 ```gdscript
 var db_id := OS.get_environment("APPWRITE_DATABASE_ID")
 var table_id := OS.get_environment("APPWRITE_TABLE_ID")
 
-# List the latest 10 documents ordered by bestScore
-var list := await Appwrite.databases.list_documents(db_id, table_id, [
+# List the 10 rows with the highest bestScore.
+var list := await Appwrite.tables_db.list_rows(db_id, table_id, [
 	Query.order_desc("bestScore"),
 	Query.limit(10)
 ])
 print("list status=", list.get("status_code"))
 
-# Create a document (documentId can be "unique()")
-var created := await Appwrite.databases.create_document(
+# Create a row (rowId can be "unique()").
+var created := await Appwrite.tables_db.create_row(
 	db_id,
 	table_id,
 	"unique()",
@@ -137,19 +151,19 @@ var created := await Appwrite.databases.create_document(
 )
 print("create status=", created.get("status_code"))
 
-# Update a document
-var doc_id := str(created.get("data", {}).get("$id", ""))
-if not doc_id.is_empty():
-	var updated := await Appwrite.databases.update_document(
+# Update a row.
+var row_id := str(created.get("data", {}).get("$id", ""))
+if not row_id.is_empty():
+	var updated := await Appwrite.tables_db.update_row(
 		db_id,
 		table_id,
-		doc_id,
+		row_id,
 		{"bestScore": 200}
 	)
 	print("update status=", updated.get("status_code"))
 
-# Filter example: only docs where userId equals a value
-# var filtered := await Appwrite.databases.list_documents(db_id, table_id, [
+# Filter to rows where userId matches a value.
+# var filtered := await Appwrite.tables_db.list_rows(db_id, table_id, [
 # 	Query.equal("userId", "some-user-id")
 # ])
 ```
@@ -202,19 +216,19 @@ print("final status=", final.get("status_code"))
 print("execution=", final.get("data"))
 ```
 
-### Realtime (subscribe to document events)
+### Realtime (subscribe to row events)
 
 ```gdscript
 var db_id := OS.get_environment("APPWRITE_DATABASE_ID")
 var table_id := OS.get_environment("APPWRITE_TABLE_ID")
 
-# This channel receives create/update/delete events for documents in the collection.
-var channel := "databases.%s.collections.%s.documents" % [db_id, table_id]
+# This channel receives create, update, and delete events for rows in the table.
+var channel := "tablesdb.%s.tables.%s.rows" % [db_id, table_id]
 
-# If your collection requires auth, login first (see Account example).
+# Sign in before subscribing to protected rows.
 var sub_id := Appwrite.realtime.subscribe([channel], func (msg: Dictionary) -> void:
 	# Typical event payload:
-	# { events:[], channels:[], timestamp:"...", payload:{...}, type:"event" }
+	# { events:[], channels:[], subscriptions:[], timestamp:"...", payload:{...}, type:"event" }
 	var payload: Variant = msg.get("payload")
 	print("realtime events=", msg.get("events"))
 	print("payload=", payload)
@@ -223,9 +237,6 @@ var sub_id := Appwrite.realtime.subscribe([channel], func (msg: Dictionary) -> v
 # Later, unsubscribe when you no longer need updates.
 # Appwrite.realtime.unsubscribe(sub_id)
 
-# Only call this if you want to explicitly tear down the socket (e.g. app quit).
-# In most games you keep the connection open and just subscribe/unsubscribe.
-# Appwrite.realtime.disconnect_now()
 ```
 
 ## Current progress
@@ -243,17 +254,15 @@ Implemented in `addons/appwrite/src/services/account.gd`.
 Notes:
 - Method name avoids Godot’s built-in `Object.get()` collision (uses `get_current()` / `get_account()` naming).
 
-### ✅ Databases (Tables)
+### ✅ TablesDB
 
-Implemented in `addons/appwrite/src/services/databases.gd`.
+Use `Appwrite.tables_db` for `create_row()`, `list_rows()`, `get_row()`, `update_row()`, and `delete_row()`. The list response contains `data.rows` and `data.total`. List and get calls accept `Query` strings for filtering or selecting columns. See the [TablesDB REST API](https://appwrite.io/docs/references/cloud/client-rest/tablesDB).
 
-- “Table” terminology in the public API (Appwrite REST still uses `/collections/...`)
-- Create / list / get / delete documents
-- Query filtering via `queries[]`
+### Migrating from collections and documents
 
-Important query detail (Appwrite v1.8+):
-- Queries must be JSON-encoded strings (same as Appwrite Web SDK `Query.toString()`), and URL-encoded when sent.
-- This is handled by `addons/appwrite/src/query.gd` + the Databases service.
+Existing collections and documents are accessible through TablesDB with their existing IDs. When switching to `Appwrite.tables_db`, use the equivalent row methods and read `data.rows` from list responses. Update Realtime channels to `tablesdb.<DATABASE_ID>.tables.<TABLE_ID>.rows`. See Appwrite's [TablesDB migration overview](https://appwrite.io/changelog/entry/2025-08-26-2).
+
+Existing `Appwrite.databases.*_document()` calls still use the legacy REST routes and return `data.documents` for lists.
 
 ### ✅ Functions
 
@@ -261,7 +270,7 @@ Implemented in `addons/appwrite/src/services/functions.gd`.
 
 - Create function executions
 - Poll/wait for execution to reach a terminal status (`wait_for_execution()`)
-- Returns execution output (`responseStatusCode`, `responseBody`) when available
+- Returns execution output (`responseStatusCode`, `responseBody`) when available. The current Appwrite response model identifies the function with `resourceId`.
 
 ### ✅ Storage
 
@@ -277,33 +286,20 @@ Implemented in `addons/appwrite/src/services/storage.gd`.
 
 Implemented in `addons/appwrite/src/services/realtime.gd`.
 
-- WebSocket-based subscriptions (`Appwrite.realtime.subscribe([...], callback)`)
+- One WebSocket per client for `Appwrite.realtime.subscribe(channels, callback, queries)`
 - Session auth via the same cookie jar used for REST calls
-- Automatically reconnects when the subscribed channel set changes
+- Optional server-side filters through the third argument, an array of `Query` strings
+- Automatic reconnect and resubscription after a connection drops
+- The socket closes when the last subscription is removed. Call `clear_subscriptions()` when switching accounts, then subscribe again after signing in.
 
-Example:
-
-```gdscript
-var channel := "databases.%s.collections.%s.documents" % [db_id, table_id]
-var sub_id := Appwrite.realtime.subscribe([channel], func (msg: Dictionary) -> void:
-	print(msg)
-)
-
-# Later:
-Appwrite.realtime.unsubscribe(sub_id)
-
-# Only call this if you want to explicitly tear down the socket (e.g. app quit).
-# In most games you keep the connection open and just subscribe/unsubscribe
-# when the player joins/leaves a match.
-# Appwrite.realtime.disconnect_now()
-```
+See [Appwrite Realtime subscriptions](https://appwrite.io/docs/apis/realtime/subscribe).
 
 ## Tests / Debug scenes
 
 This repo includes Godot scenes under `tests/` that run end-to-end flows.
 
 - `tests/test_accounts.tscn`: account flows
-- `tests/test_databases.tscn`: document CRUD
+- `tests/test_databases.tscn`: TablesDB row CRUD
 - `tests/test_functions.tscn`: function execution + wait
 - `tests/test_storage.tscn`: upload/download/delete against a bucket
 - `tests/test_queries.tscn`: query diagnostics (baseline list + filtered list)
@@ -313,7 +309,7 @@ This repo includes Godot scenes under `tests/` that run end-to-end flows.
 
 ## Examples
 
-- `examples/realtime_monitor.tscn`: subscribes to a collection channel and prints every realtime message.
+- `examples/realtime_monitor.tscn`: subscribes to a table's row channel and prints Realtime events.
 
 Env vars:
 
@@ -324,8 +320,8 @@ Useful env flags:
 
 - `APPWRITE_DEBUG_PERSIST_SESSION=true` keeps a cookie jar on disk to reduce repeated logins.
 - `APPWRITE_DEBUG_HTTP=true` prints request details from the client.
-- `APPWRITE_DEBUG_REALTIME=true` prints realtime WebSocket state + frames.
-- `APPWRITE_TEST_PRINT_DOCS_JSON=true` prints full document JSON in the query test.
+- `APPWRITE_DEBUG_REALTIME=true` prints Realtime connection attempts and incoming frame types in the Realtime test scenes.
+- `APPWRITE_TEST_PRINT_DOCS_JSON=true` prints full row JSON in the query test.
 
 ## Security / design constraints
 

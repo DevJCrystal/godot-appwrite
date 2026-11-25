@@ -18,7 +18,7 @@ func _init(client: AppwriteClient):
 
 func list_buckets(queries: Array = []) -> Dictionary:
 	var path := "/storage/buckets"
-	path = _with_queries(path, queries)
+	path = Query._append_to_path(path, queries)
 	return await _client.call_api(HTTPClient.METHOD_GET, path)
 
 
@@ -33,7 +33,7 @@ func get_bucket(bucket_id: String) -> Dictionary:
 
 func list_files(bucket_id: String, queries: Array = []) -> Dictionary:
 	var path := "/storage/buckets/%s/files" % bucket_id
-	path = _with_queries(path, queries)
+	path = Query._append_to_path(path, queries)
 	return await _client.call_api(HTTPClient.METHOD_GET, path)
 
 
@@ -97,21 +97,6 @@ func create_file_from_bytes(
 # -------------------------------------------------------------------------
 # Helpers
 # -------------------------------------------------------------------------
-
-func _with_queries(path: String, queries: Array) -> String:
-	if queries.is_empty():
-		return path
-	return _with_queries_encoded(path, queries)
-
-
-func _with_queries_encoded(path: String, queries: Array) -> String:
-	var sep := "?"
-	var out := path
-	for q in queries:
-		out += "%squeries[]=%s" % [sep, str(q).uri_encode()]
-		sep = "&"
-	return out
-
 
 func _multipart_boundary() -> String:
 	# Good enough entropy for request-local boundaries.

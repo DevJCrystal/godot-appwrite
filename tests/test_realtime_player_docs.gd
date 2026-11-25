@@ -5,7 +5,7 @@ const Helpers := preload("res://tests/test_helpers.gd")
 # Live leaderboard (read-only):
 # - Loads the table once on connect.
 # - Subscribes to realtime and re-renders on updates.
-# - Highlights the current player's document (doc $id == user $id).
+# - Highlights the current player's row when its ID matches the user's ID.
 
 var _realtime: AppwriteRealtime = null
 var _sub_id: int = -1
@@ -13,9 +13,9 @@ var _sub_id: int = -1
 var _database_id := ""
 var _table_id := ""
 
-var _player_doc_id := ""
+var _player_row_id := ""
 
-var _docs_by_id: Dictionary = {} # String -> Dictionary
+var _rows_by_id: Dictionary = {} # String -> Dictionary
 
 var _score_field := "bestScore"
 
@@ -41,7 +41,7 @@ func _ready() -> void:
 		_set_status("Missing APPWRITE_TEST_EMAIL / APPWRITE_TEST_PASSWORD")
 		return
 
-	print("--- Starting Realtime Player Docs Test (Top 5) ---")
+	print("--- Starting Realtime Player Rows Test (Top 5) ---")
 	print("DB=", _database_id, " Table=", _table_id)
 	print("Tracking field=", _score_field)
 
@@ -55,8 +55,8 @@ func _ready() -> void:
 	var me_resp: Dictionary = auth.get("me", {})
 	var me_data: Variant = me_resp.get("data")
 	var me: Dictionary = me_data if typeof(me_data) == TYPE_DICTIONARY else {}
-	_player_doc_id = str(me.get("$id", ""))
-	if _player_doc_id.is_empty():
+	_player_row_id = str(me.get("$id", ""))
+	if _player_row_id.is_empty():
 		_set_status("Could not determine user $id")
 		return
 
@@ -70,18 +70,18 @@ func _ready() -> void:
 	if rt_debug == "true" or rt_debug == "1" or rt_debug == "yes" or rt_debug == "y":
 		_realtime.set_debug(true)
 
-	# Load documents on connect (ordered by bestScore).
-	await _load_all_documents()
+	# Load rows on connect (ordered by bestScore).
+	await _load_all_rows()
 	_render_leaderboard()
 
-	# Subscribe to the collection and filter events down to the two doc IDs.
-	var channel := "databases.%s.collections.%s.documents" % [_database_id, _table_id]
+	# Subscribe to row changes in the table.
+	var channel := "tablesdb.%s.tables.%s.rows" % [_database_id, _table_id]
 	_sub_id = _realtime.subscribe([channel], Callable(self, "_on_realtime_event"))
 	if _sub_id < 0:
 		_set_status("Subscribe failed")
 		return
 
-	print("Subscribed. Player doc=", _player_doc_id)
+	print("Subscribed. Player row=", _player_row_id)
 
 
 func _exit_tree() -> void:
@@ -123,69 +123,57 @@ func _set_status(text: String) -> void:
 		l.text = "%d) -" % (i + 1)
 
 
-func _load_all_documents() -> void:
-	_docs_by_id = {}
+func _load_all_rows() -> void:
+	_rows_by_id = {}
 
 	# Ask server to sort by score so we can reliably display the leaderboard.
-	var resp := await Appwrite.databases.list_documents(
+	var resp := await Appwrite.tables_db.list_rows(
 		_database_id,
 		_table_id,
 		[Query.order_desc(_score_field), Query.limit(100)]
 	)
 	if int(resp.get("status_code", 0)) != 200:
-		printerr("List documents failed: ", resp.get("data", {}))
+		printerr("List rows failed: ", resp.get("data", {}))
 		return
 
 	var data: Variant = resp.get("data")
 	var d: Dictionary = data if typeof(data) == TYPE_DICTIONARY else {}
 
-	# Appwrite returns {documents:[...]} for collections. Keep a fallback for other shapes.
-	var raw_list: Variant = d.get("documents", null)
-	if raw_list == null:
-		raw_list = d.get("rows", null)
-	if raw_list == null:
-		raw_list = d.get("data", null)
-
-	var docs: Array = []
-	if typeof(raw_list) == TYPE_ARRAY:
-		docs = raw_list as Array
-	elif typeof(data) == TYPE_ARRAY:
-		docs = data as Array
-
-	for item in docs:
+	var rows: Array = d.get("rows", [])
+	for item in rows:
 		if typeof(item) != TYPE_DICTIONARY:
 			continue
 		var doc := item as Dictionary
 		var id := str(doc.get("$id", ""))
 		if id.is_empty():
 			continue
-		_docs_by_id[id] = doc
+		_rows_by_id[id] = doc
 
-	# Ensure player's document is present even if it isn't in the top results.
-	if not _player_doc_id.is_empty() and not _docs_by_id.has(_player_doc_id):
-		var me_doc := await Appwrite.databases.get_document(_database_id, _table_id, _player_doc_id)
+	# Ensure player's row is present even if it isn't in the top results.
+	if not _player_row_id.is_empty() and not _rows_by_id.has(_player_row_id):
+		var me_doc := await Appwrite.tables_db.get_row(_database_id, _table_id, _player_row_id)
 		if int(me_doc.get("status_code", 0)) == 200:
 			var md: Variant = me_doc.get("data")
 			if typeof(md) == TYPE_DICTIONARY:
-				_docs_by_id[_player_doc_id] = md as Dictionary
+				_rows_by_id[_player_row_id] = md as Dictionary
 
-	print("Loaded docs count=", _docs_by_id.size(), " player=", _player_doc_id)
+	print("Loaded rows count=", _rows_by_id.size(), " player=", _player_row_id)
 
 
 func _render_leaderboard() -> void:
 	if _row_labels.is_empty():
 		return
 
-	# Build sortable list of docs.
+	# Build sortable list of rows.
 	var entries: Array[Dictionary] = []
-	for id in _docs_by_id.keys():
-		var v: Variant = _docs_by_id[id]
+	for id in _rows_by_id.keys():
+		var v: Variant = _rows_by_id[id]
 		if typeof(v) != TYPE_DICTIONARY:
 			continue
 		var doc := v as Dictionary
-		var doc_id := str(doc.get("$id", id))
+		var row_id := str(doc.get("$id", id))
 		var score := _coerce_score(doc.get(_score_field))
-		entries.append({"id": doc_id, "score": score})
+		entries.append({"id": row_id, "score": score})
 
 	entries.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
 		return float(a.get("score", 0.0)) > float(b.get("score", 0.0))
@@ -199,7 +187,7 @@ func _render_leaderboard() -> void:
 		var e := entries[i]
 		var id := str(e.get("id", ""))
 		var score_str := _score_to_string(e.get("score"))
-		var is_you := (not _player_doc_id.is_empty() and id == _player_doc_id)
+		var is_you := (not _player_row_id.is_empty() and id == _player_row_id)
 		label.text = "%d) %s%s  bestScore=%s" % [i + 1, ("YOU → " if is_you else ""), id, score_str]
 
 
@@ -227,7 +215,7 @@ func _score_to_string(v: Variant) -> String:
 
 
 func _on_realtime_event(msg: Dictionary) -> void:
-	# Cache every doc update, then re-render top 5.
+	# Cache row changes, then re-render the top five.
 	var payload: Variant = msg.get("payload")
 	if typeof(payload) != TYPE_DICTIONARY:
 		return
@@ -236,5 +224,5 @@ func _on_realtime_event(msg: Dictionary) -> void:
 	if id.is_empty():
 		return
 
-	_docs_by_id[id] = doc
+	_rows_by_id[id] = doc
 	_render_leaderboard()

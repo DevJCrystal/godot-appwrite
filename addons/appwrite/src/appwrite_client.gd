@@ -5,6 +5,7 @@ extends Node
 var account: AppwriteAccount
 var functions: AppwriteFunctions
 var databases: AppwriteDatabases
+var tables_db: AppwriteTablesDB
 var storage: AppwriteStorage
 var realtime: AppwriteRealtime
 
@@ -12,6 +13,7 @@ var realtime: AppwriteRealtime
 
 # Configuration
 var _project_id: String = ""
+var _environment_id: String = ""
 var _endpoint: String = "https://cloud.appwrite.io/v1"
 var _api_key: String = ""
 var _self_signed: bool = false
@@ -20,20 +22,22 @@ var _debug_http: bool = false
 var _trusted_ca_chain: X509Certificate = null
 var _cookie_jar: Dictionary = {}
 var _persist_session: bool = false
+var _environment_generation := 0
 
 # Default Headers
 var _headers: Dictionary = {
 	"Content-Type": "application/json",
-	"X-Appwrite-Response-Format": "1.8.0"
+	"X-Appwrite-Response-Format": "2.7.2"
 }
 
 func _ready():
 	# Load .env (optional)
-	EnvLoader.load_env("res://.env")
+	preload("res://addons/appwrite/src/env_loader.gd").load_env()
 	
 	# Read environment variables
 	var env_endpoint = OS.get_environment("APPWRITE_ENDPOINT")
 	var env_project = OS.get_environment("APPWRITE_PROJECT_ID")
+	var env_environment := OS.get_environment("APPWRITE_ENVIRONMENT_ID").strip_edges()
 	var env_key = OS.get_environment("APPWRITE_KEY")
 	var env_enable_key = OS.get_environment("APPWRITE_ENABLE_API_KEY")
 	var env_self_signed = OS.get_environment("APPWRITE_SELF_SIGNED")
@@ -46,6 +50,9 @@ func _ready():
 		
 	if not env_project.is_empty():
 		set_project(env_project.strip_edges())
+
+	if not env_environment.is_empty():
+		set_environment(env_environment)
 
 	# API keys are intentionally opt-in (client-safe by default).
 	# If you really want to use X-Appwrite-Key (server-side tooling), set:
@@ -95,6 +102,7 @@ func _ready():
 	account = AppwriteAccount.new(self)
 	functions = AppwriteFunctions.new(self)
 	databases = AppwriteDatabases.new(self)
+	tables_db = AppwriteTablesDB.new(self)
 	storage = AppwriteStorage.new(self)
 
 	# Realtime is a Node (WebSocket poll loop), so keep it as a child.
@@ -133,8 +141,27 @@ func set_project(id: String) -> AppwriteClient:
 	_headers["X-Appwrite-Project"] = _project_id
 	return self
 
+## Select an Appwrite Cloud project environment. An empty ID selects the main project.
+func set_environment(id: String) -> AppwriteClient:
+	id = id.strip_edges()
+	if id == _environment_id:
+		return self
+
+	_environment_id = id
+	_environment_generation += 1
+	if id.is_empty():
+		_headers.erase("X-Appwrite-Environment")
+	else:
+		_headers["X-Appwrite-Environment"] = id
+
+	_cookie_jar.clear()
+	if realtime != null:
+		realtime.clear_subscriptions()
+		_load_persisted_cookies()
+	return self
+
 func set_endpoint(url: String) -> AppwriteClient:
-	_endpoint = url
+	_endpoint = url.strip_edges().trim_suffix("/")
 	return self
 
 func set_key(key: String) -> AppwriteClient:
@@ -161,6 +188,7 @@ func call_api(method: HTTPClient.Method, path: String, headers: Dictionary = {},
 	await get_tree().process_frame
 	
 	# Merge default headers with request-specific headers
+	var environment_generation := _environment_generation
 	var request_headers = _headers.duplicate()
 	for key in headers:
 		request_headers[key] = headers[key]
@@ -193,14 +221,7 @@ func call_api(method: HTTPClient.Method, path: String, headers: Dictionary = {},
 	# the correct certificate. `common_name_override` makes TLS validation use the
 	# expected hostname (and triggers SNI in Godot).
 	if full_url.begins_with("https://"):
-		var host_for_tls := _extract_hostname(full_url)
-		if _self_signed:
-			http.set_tls_options(TLSOptions.client_unsafe(_trusted_ca_chain))
-		else:
-			if host_for_tls.is_empty():
-				http.set_tls_options(TLSOptions.client(_trusted_ca_chain))
-			else:
-				http.set_tls_options(TLSOptions.client(_trusted_ca_chain, host_for_tls))
+		http.set_tls_options(_get_tls_options(full_url))
 	
 	if _debug_http:
 		print("DEBUG: Making request to: ", full_url)
@@ -230,9 +251,10 @@ func call_api(method: HTTPClient.Method, path: String, headers: Dictionary = {},
 	var response_headers = response[2]
 	var response_body = response[3]
 
-	# Update cookie jar from response headers (even for non-2xx responses).
-	_update_cookie_jar_from_headers(response_headers)
-	_save_persisted_cookies()
+	# A response from the previous environment must not modify the current session.
+	if environment_generation == _environment_generation:
+		_update_cookie_jar_from_headers(response_headers)
+		_save_persisted_cookies()
 	
 	# Check if the request completed successfully
 	if result != HTTPRequest.RESULT_SUCCESS:
@@ -291,7 +313,17 @@ func clear_cookies() -> void:
 	_clear_persisted_cookies()
 
 
+func _get_tls_options(url: String) -> TLSOptions:
+	if _self_signed:
+		return TLSOptions.client_unsafe(_trusted_ca_chain)
+	return TLSOptions.client(_trusted_ca_chain, _extract_hostname(url))
+
+
 func _cookie_storage_path() -> String:
+	if not _environment_id.is_empty():
+		var scope := JSON.stringify([_endpoint, _project_id, _environment_id]).sha256_text()
+		return "user://appwrite_environment_cookies_%s.json" % scope
+
 	# Keep it stable across runs but distinct per project + endpoint host.
 	var host := _extract_hostname(_endpoint)
 	if host.is_empty():
@@ -326,8 +358,8 @@ func _load_persisted_cookies() -> void:
 func _save_persisted_cookies() -> void:
 	if not _persist_session:
 		return
-	# If jar is empty, don't create/overwrite the file.
 	if _cookie_jar.is_empty():
+		_clear_persisted_cookies()
 		return
 	var path := _cookie_storage_path()
 	var f := FileAccess.open(path, FileAccess.WRITE)
@@ -353,6 +385,13 @@ func _build_cookie_header() -> String:
 		if not name.is_empty() and not value.is_empty():
 			parts.append("%s=%s" % [name, value])
 	return "; ".join(parts)
+
+
+func _get_realtime_session() -> String:
+	var cookie_name := "a_session_" + _project_id
+	if not _environment_id.is_empty():
+		cookie_name += "_env_" + _environment_id
+	return str(_cookie_jar.get(cookie_name, _cookie_jar.get(cookie_name + "_legacy", "")))
 
 
 func _update_cookie_jar_from_headers(response_headers: PackedStringArray) -> void:
